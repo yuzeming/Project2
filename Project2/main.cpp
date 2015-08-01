@@ -48,8 +48,7 @@ double CalcR2(const Point2d & x,const Point2d & y,const Point2d &z)
 }
 
 //在多边形轮廓中，计算圆心在x->y射线上，且x点在圆上的圆，最大直径。
-//同时返回与该圆恰好相交的线段。
-double calcR(const vector<vector<Point> >& poly, const Point2d & x,const Point2d & y,int a,int b,int &ret_x,int& ret_y)
+double calcR(const vector<vector<Point> >& poly, const Point2d & x,const Point2d & y,int a,int b)
 {
 	double ret_R = max_r,tmpR=0;
 	for( size_t i = 0; i < poly.size(); ++i )
@@ -65,21 +64,9 @@ double calcR(const vector<vector<Point> >& poly, const Point2d & x,const Point2d
 				if (calcCrossPoint(x,y,c,d,cross))
 				{
 					double alpha = 	calcAngle(x,y,c,d);
-					tmpR = norm(cross-x) / (1 + 1.0/sin(alpha));
-					if (tmpR < ret_R)
-					{
-						ret_x = i;
-						ret_y = j;
-						ret_R = tmpR;
-					}
+					ret_R =min(ret_R, norm(cross-x) / (1 + 1.0/sin(alpha)));
 				}
-				tmpR = min( CalcR2(x,y,c),CalcR2(x,y,d));
-				if (tmpR < ret_R)
-				{
-					ret_x = i;
-					ret_y = j;
-					ret_R = tmpR;
-				}
+				ret_R = min(ret_R, min(CalcR2(x, y, c), CalcR2(x, y, d)));
 			}
 	}
 	return ret_R;
@@ -90,44 +77,43 @@ Point2d ComplexMul(const Point2d& a,const Point2d& b)
 	return Point2d(a.x*b.x-a.y*b.y,a.y*b.x+a.x*b.y); 
 }
 
-map< pair<int,int>, vector<Point2d> > crosspoint;
-void addCirclePoint(const vector<vector<Point> >& poly,int a,int b,const Point2d& x)
-{
-	if (CrossDot(poly[a][b],poly[a][(b+1)%poly[a].size()],x) < 1e-3)
-		crosspoint[make_pair(a,b)].push_back(x);
-}
-
-bool check(int a,int b,const Point2d& x,double eps)
-{
-	auto it = crosspoint.find(make_pair(a,b));
-	if (it!=crosspoint.end())
-	{
-		size_t len = it->second.size();
-		for (size_t i=0;i<len;++i)
-			if (norm(it->second.at(i)-x)<eps)
-				return false;
-	}
-	return true;
-}
-
 double atan2(const Point2d a)
-{
-	return atan2(a.y,a.x);
-}
+{	return atan2(a.y,a.x);	}
 
 vector<pair<Point2d,double> > center; //圆心 <x,y,r>
+
 int addCircle(const Point2d o,double R)
 {
 	center.push_back(make_pair(o,R));
 	return center.size()-1;
 }
 
-map<int,vector<int> > lines;
+double check(const Point2d& x)
+{
+	double ret = max_r;
+	for (size_t i = 0; i < center.size(); ++i)
+		ret = min(ret, norm(center[i].first - x));
+	return ret;
+}
 
+map<int,vector<int> > lines;
+map<int, int> color;
 void addLine(int c1,int c2)
 {
 	lines[c1].push_back(c2);
 	lines[c2].push_back(c1);
+}
+
+#define sqr(x) ((x)*(x))
+
+double fillColor(int x, int c)
+{
+	double ret = sqr(center[x].second);
+	color[x] = c;
+	for (size_t i = 0; i < lines[x].size(); ++i)
+		if (color.find(lines[x][i]) == color.end())
+			ret += fillColor(lines[x][i], c);
+	return ret;
 }
 
 int main()
@@ -136,12 +122,9 @@ int main()
 	vector<vector<Point> > contours;
 	vector<Vec4i> hierarchy;
 	
-
-	src = imread("thu.png",IMREAD_GRAYSCALE);
-	erode(src,src,Mat());
+	src = imread("mew.png",IMREAD_GRAYSCALE);
 
 	cvtColor(src,res,COLOR_GRAY2BGR);
-	//res.zeros(res.size());
 
 	threshold(src,threshold_output,70,255,THRESH_BINARY_INV);
 	
@@ -151,19 +134,6 @@ int main()
 	for( size_t i = 0; i < contours.size(); ++i )
 		approxPolyDP( Mat(contours[i]), contours_poly[i], 1, true);
 
-	for( size_t i = 0; i < contours_poly.size(); ++i )
-	{
-		size_t len = contours_poly[i].size();
-		cout << "Poly ("<< len  << ") : ";
-		for (size_t j = 0; j < len; ++j)
-		{
-			//line(res,contours_poly[i][j],contours_poly[i][(j+1)%len],Scalar(0,255,0));
-			cout<<contours_poly[i][j]<<" ";
-		}
-		cout<<endl;
-	}
-	
-	int p,q;
 	for( size_t i = 0; i < contours_poly.size(); ++i )
 	if ( contours_poly[i].size() > 3)
 	{
@@ -187,65 +157,77 @@ int main()
 				c1 = c / norm(c);
 				for (int k=0;k<step_max;++k)
 				{
+					
 					x = c * ( (k + 0.5) / step_max ) + a ;
-					if (!check(i,j,x,step_len))
-					{
-						lastCid = -1;
+					double R = check(x);
+					if ( R <= step_len )
 						continue;
-					}
 					y = x + Point2d(c1.y,-c1.x) * 1000 ;
-					double R = calcR(contours_poly,x,y,i,j,p,q);
-					R = min(R,lastR*1.3);
-					lastR = R;
-					addCirclePoint(contours_poly,p,q,x+Point2d(c1.y,-c1.x) * (2 * R));
+					R = calcR(contours_poly,x,y,i,j);
+					R = min(R, lastR * 1.1);
+
 					Point2d o = x+Point2d(c1.y,-c1.x) * R;
 
 					int cid = addCircle(o,R);
 
-					if (lastCid != -1)
-						addLine(lastCid,cid);
+					if (lastCid != -1 && norm(center[lastCid].first - o) <= step_len * 3)
+						addLine(lastCid, cid);
+					lastR = R;
 					lastCid = cid;
-
-					//circle(res,o,R,Scalar(255,255,0),1);
-
-					//line(res,x,y,Scalar(0,0,255));
-					//imshow("test",res);
-					//waitKey(0);
 				}
 			}
 
-			//线段终点拐角，逐一模拟
+			//线段终点拐角逐一模拟
 /*			c = contours_poly[i][(j+2)%len];
 			double alpha = atan2(a-b);
-			double beta = atan2(c-b);
+			double beta = atan2(b-c);
 			double phi = 
 			x = b;
 			y = x + ComplexMul((a-b),Point2d(cos(phi),sin(phi)))*1000;
 			line(res,x,y,Scalar(0,0,255));
 	*/		
 			
+		}
+	}
 
-			//imshow("test",res);
-			//waitKey(0);
+
+	int tot_color = 1;
+	for (size_t i = 0; i < center.size(); ++i)
+		if (color.find(i) == color.end())
+			if (fillColor(i, tot_color) > 5)
+				++tot_color;
+			else
+				fillColor(i, -1);
+
+	for (size_t i = 0; i<center.size(); ++i)
+		if (lines[i].size() == 1 && color[i] != -1)
+		{
+			circle(res, center[i].first, 1, Scalar(0,255, 0), 2);
+			int cp = -1;
+			double tmp = max_r + 1;
+			for (size_t j = 0; j < center.size(); ++j)
+				if ( i != j && norm(center[i].first - center[j].first) < tmp && ( color[i] != color[j] && color[j] != -1 || color[i] == color[j] && lines[j].size() == 1 ) )
+				{
+					tmp = norm(center[i].first - center[j].first);
+					cp = j;
+				}
+			if (cp != -1 && tmp <= step_len * 3)
+				addLine(i, cp);
 		}
 
-	}
 
-
-//	for (size_t i=0;i<center.size();++i)
-//		if (lines[i].size()==1)
-//			for (size_t j=0;j<center.size();++j)
-//				if (i!=j && norm(center[i].first-center[j].first) < center[i].second+center[j].second+step_len )
-//					addLine(i,j);
-
-	for (size_t i=0;i<lines.size();++i)
-	{
-		for (size_t j=0;j<lines[i].size();++j)
-			if (lines[i][j]>i)
-				line(res,center[i].first,center[lines[i][j]].first,Scalar(255,255,0),1);
-		//circle(res,center[i].first,center[i].second,Scalar(255,0,0),1);
-	}
 	
+	for (size_t i = 0; i<center.size(); ++i)
+	{
+		for (size_t j = 0; j<lines[i].size(); ++j)
+			line(res, center[i].first, center[lines[i][j]].first, Scalar(0, 255, 0 ), 2);
+		//circle(res, center[i].first, 2, Scalar(255, 0, 0), 2);
+	}
+
+
+
+
+
 	imshow("test",res);
 	waitKey(0);
 
