@@ -4,18 +4,18 @@
 #include "opencv2/opencv.hpp"
 #include <cmath>
 #include <iostream>
+#include <fstream>
 
 using namespace cv;
 using namespace std;
 
 const double PI = 3.1415926535897932384626433832795;
 
-double step_len = 3 ;
-double min_r = 5;
-double max_r = 20;
-Mat res_tmp;
-
-
+double step_len = 2 ;
+double min_r = 4;
+double max_r = 10;
+double eps = 4;
+Mat src, threshold_output, res;
 
 double CrossDot(const Point2d &a,const Point2d &b,const Point2d &c)
 {
@@ -48,7 +48,7 @@ double CalcR2(const Point2d & x,const Point2d & y,const Point2d &z)
 }
 
 //在多边形轮廓中，计算圆心在x->y射线上，且x点在圆上的圆，最大直径。
-double calcR(const vector<vector<Point> >& poly, const Point2d & x,const Point2d & y,int a,int b)
+double calcR(const vector<vector<Point> >& poly, const Point2d & x,const Point2d & y)
 {
 	double ret_R = max_r,tmpR=0;
 	for( size_t i = 0; i < poly.size(); ++i )
@@ -56,12 +56,11 @@ double calcR(const vector<vector<Point> >& poly, const Point2d & x,const Point2d
 		Point2d c,d,cross;
 		size_t len = poly[i].size();
 		for (size_t j = 0; j<len; ++j)
-			if (i!=a||(j!=b))
 			{
 				c = poly[i][j];
 				d = poly[i][(j+1)%len];
 				Point2d tmp = d - c;
-				if (calcCrossPoint(x,y,c,d,cross))
+				if (calcCrossPoint(x,y,c,d,cross)&& norm(cross-x) > 0.1 )//
 				{
 					double alpha = 	calcAngle(x,y,c,d);
 					ret_R =min(ret_R, norm(cross-x) / (1 + 1.0/sin(alpha)));
@@ -80,49 +79,82 @@ Point2d ComplexMul(const Point2d& a,const Point2d& b)
 double atan2(const Point2d a)
 {	return atan2(a.y,a.x);	}
 
-vector<pair<Point2d,double> > center; //圆心 <x,y,r>
 
-int addCircle(const Point2d o,double R)
+#define CalcCircle(a)  ((a).o) = ((a).x + (a).p * (a).r)
+class TCircle
 {
-	center.push_back(make_pair(o,R));
-	return center.size()-1;
-}
+public:
+	Point2d x, p; //垂点，法线
+	double r; // 半径
+	Point2d o; //圆心 o = x + p * r
+};
 
-double check(const Point2d& x)
+vector< vector<TCircle> > center; //圆心 <x,y,r>
+#define VecLast(x) (x[x.size()-1])
+
+bool check(Point2d o,double r)
 {
-	double ret = max_r;
 	for (size_t i = 0; i < center.size(); ++i)
-		ret = min(ret, norm(center[i].first - x));
-	return ret;
+	{
+		int size = center[i].size();
+		for (size_t j = 0; j < size; ++j)
+		{
+			if (!(i + 1 == center.size() && j + 1 == size) && norm(center[i][j].o - o) < 3)
+				return false;
+			if (norm(center[i][j].o - o) < 1)
+				return false;
+		}
+	}
+
+	
+
+	return true;
 }
 
-map<int,vector<int> > lines;
-map<int, int> color;
-void addLine(int c1,int c2)
+bool CheckLine(const vector<vector<Point> >& poly,Point2d x, Point2d y)
 {
-	lines[c1].push_back(c2);
-	lines[c2].push_back(c1);
+	Point2d a, b, ret;
+	for (size_t i = 0; i < poly.size(); ++i)
+	{
+		size_t len = poly[i].size();
+		for (size_t j = 0; j < len; ++j)
+		{
+			a = poly[i][j];
+			b = poly[i][(j + 1) % len];
+			if (calcCrossPoint(a, b, x, y, ret))
+				return false;
+
+		}
+	}
+	return true;
 }
 
-#define sqr(x) ((x)*(x))
-
-double fillColor(int x, int c)
+void addCircle(const vector<vector<Point> >& poly,const Point2d x, const Point2d p,double r)
 {
-	double ret = sqr(center[x].second);
-	color[x] = c;
-	for (size_t i = 0; i < lines[x].size(); ++i)
-		if (color.find(lines[x][i]) == color.end())
-			ret += fillColor(lines[x][i], c);
-	return ret;
+	TCircle tmp;
+	tmp.x = x;
+	tmp.p = p;
+	tmp.r = r;
+	tmp.o = x + p * r;
+
+	if (!check(tmp.o,tmp.r))
+		return;
+
+	if (center.size() == 0 || ( VecLast(center).size() != 0 && (!CheckLine(poly,VecLast(VecLast(center)).o, tmp.o) || norm(VecLast(VecLast(center)).o- tmp.o) > eps*2) ))
+		center.push_back(vector<TCircle>());
+	VecLast(center).push_back(tmp);
+	
+
 }
+
 
 int main()
 {
-	Mat src,threshold_output,res;
+	
 	vector<vector<Point> > contours;
 	vector<Vec4i> hierarchy;
 	
-	src = imread("mew.png",IMREAD_GRAYSCALE);
+	src = imread("b.png",IMREAD_GRAYSCALE);
 
 	cvtColor(src,res,COLOR_GRAY2BGR);
 
@@ -132,104 +164,237 @@ int main()
 	
 	vector<vector<Point> > contours_poly( contours.size() );
 	for( size_t i = 0; i < contours.size(); ++i )
-		approxPolyDP( Mat(contours[i]), contours_poly[i], 1, true);
+		approxPolyDP( Mat(contours[i]), contours_poly[i], 2, true);
 
 	for( size_t i = 0; i < contours_poly.size(); ++i )
-	if ( contours_poly[i].size() > 3)
+	if ( contours_poly[i].size() >= 3)
 	{
 
 		Point2d a,b,c,c1,x,y;
 		size_t len = contours_poly[i].size();
-		int lastCid = -1;
-		double lastR = max_r;
+		double R;
 		for (size_t j = 0; j < len; ++j)
 		{
 			
-			res.copyTo(res_tmp);
 			a = contours_poly[i][j];
 			b = contours_poly[i][(j+1)%len];
 
 			//直线上逐一模拟
 			c = b - a; 
-			if (norm(c) >= step_len)
+			//if (norm(c) >= step_len)
 			{
 				int step_max = int( norm(c) / step_len);
-				c1 = c / norm(c);
+				c1 = Point2d(c.y, -c.x)/ norm(c); //单位法线方向向量
 				for (int k=0;k<step_max;++k)
 				{
-					
-					x = c * ( (k + 0.5) / step_max ) + a ;
-					double R = check(x);
-					if ( R <= step_len )
-						continue;
-					y = x + Point2d(c1.y,-c1.x) * 1000 ;
-					R = calcR(contours_poly,x,y,i,j);
-					R = min(R, lastR * 1.1);
+					x = c * ( (k + 0.5) / step_max ) + a ; // 取样点
+					y = x + c1 * 1000 ; // 无限长射线
+					R = calcR(contours_poly,x,y);
+					addCircle(contours_poly,x,c1,R);
+					//line(res, x, y, Scalar(255, 255, 0));
+					//circle(res, x + c1*R, R, Scalar(0, 255, 0));
+					//imshow("test", res);
+					//waitKey(0);
 
-					Point2d o = x+Point2d(c1.y,-c1.x) * R;
-
-					int cid = addCircle(o,R);
-
-					if (lastCid != -1 && norm(center[lastCid].first - o) <= step_len * 3)
-						addLine(lastCid, cid);
-					lastR = R;
-					lastCid = cid;
 				}
 			}
 
-			//线段终点拐角逐一模拟
-/*			c = contours_poly[i][(j+2)%len];
-			double alpha = atan2(a-b);
-			double beta = atan2(b-c);
-			double phi = 
+			c = contours_poly[i][(j+2)%len];
+			double alpha = atan2(a - b);
+			double beta = atan2(c - b);
+
+			if (beta > alpha)
+				alpha += 2 * PI;
+			double turn = (alpha - beta) / 2.0;
 			x = b;
-			y = x + ComplexMul((a-b),Point2d(cos(phi),sin(phi)))*1000;
-			line(res,x,y,Scalar(0,0,255));
-	*/		
-			
+			c1 = ComplexMul(b - c, Point2d(cos(turn), sin(turn)));
+			c1 = c1 / norm(c1);
+			y = x + c1 * 1000;
+			R = calcR(contours_poly, x, y);
+
+			addCircle(contours_poly, x, c1, R);
+
+			//line(res, x, y, Scalar(255, 255, 0));
+			//circle(res, x + c1*R, R, Scalar(0, 255, 0));
+			//imshow("test", res);
+			//waitKey(0);
 		}
 	}
 
-
-	int tot_color = 1;
-	for (size_t i = 0; i < center.size(); ++i)
-		if (color.find(i) == color.end())
-			if (fillColor(i, tot_color) > 5)
-				++tot_color;
-			else
-				fillColor(i, -1);
-
-	for (size_t i = 0; i<center.size(); ++i)
-		if (lines[i].size() == 1 && color[i] != -1)
-		{
-			circle(res, center[i].first, 1, Scalar(0,255, 0), 2);
-			int cp = -1;
-			double tmp = max_r + 1;
-			for (size_t j = 0; j < center.size(); ++j)
-				if ( i != j && norm(center[i].first - center[j].first) < tmp && ( color[i] != color[j] && color[j] != -1 || color[i] == color[j] && lines[j].size() == 1 ) )
-				{
-					tmp = norm(center[i].first - center[j].first);
-					cp = j;
-				}
-			if (cp != -1 && tmp <= step_len * 3)
-				addLine(i, cp);
-		}
 
 
 	
-	for (size_t i = 0; i<center.size(); ++i)
+	//平滑半径
+	int KX = 5;
+	for (size_t i = 0; i < center.size(); ++i)
 	{
-		for (size_t j = 0; j<lines[i].size(); ++j)
-			line(res, center[i].first, center[lines[i][j]].first, Scalar(0, 255, 0 ), 2);
-		//circle(res, center[i].first, 2, Scalar(255, 0, 0), 2);
+		vector <double> R;
+		size_t len = center[i].size();
+		R.push_back(0.0);
+		for (size_t j = 0; j < len; ++j)
+			R.push_back(center[i][j].r + VecLast(R));
+		for (int j = 0; j < len; ++j)
+		{
+			center[i][j].r = (R[j + 1] - R[max(j + 1 - KX, 0)]) / min(j + 1, KX);
+			CalcCircle(center[i][j]);
+		}
 	}
 
+	
+	for (size_t i = 0; i < center.size(); ++i)
+		for (size_t j = i + 1; j < center.size(); ++j)
+			for (size_t k = 0; k < 4; ++k)
+			{
+				Point2d a, b;
+				a = (k & 1) ? center[i][0].o : VecLast(center[i]).o;
+				b = (k & 2) ? center[j][0].o : VecLast(center[j]).o;
+				if (norm(a - b) < eps * 4 && CheckLine(contours_poly, a, b))  //
+				{
+					if (k & 1)	reverse(center[i].begin(), center[i].end());
+					if (~k & 2) reverse(center[j].begin(), center[j].end());
+					for (size_t p = 0; p < center[j].size(); ++p)
+						center[i].push_back(center[j][p]);
+					center.erase(center.begin() + j);
+					--j;
+					break;
+				}
+			}
+	
+	
+	for (int i = 0; i < center.size(); ++i)
+	{
+		double len = 0;
+		for (int j = 1; j < center[i].size(); ++j)
+			len += norm(center[i][j].o - center[i][j - 1].o);
+		if (len < 5)
+		{
+			center.erase(center.begin() + i);
+			--i;
+		}
+	}
+	
+
+	//排序
+	for (int i = 1; i < center.size(); ++i)
+	{
+		bool reverse_flag = false;
+		double tmp = 1e99;
+		Point2d last = VecLast(center[i - 1]).o;
+		int next = -1;
+
+		for (int j = i; j < center.size(); ++j)
+		{
+			if (norm(last - center[j][0].o) < tmp)
+			{
+				tmp = norm(last - center[j][0].o);
+				reverse_flag = false;
+				next = j;
+			}
+			if (norm(last - VecLast(center[j]).o) < tmp)
+			{
+				tmp = norm(last - VecLast(center[j]).o);
+				reverse_flag = true;
+				next = j;
+			}
+		}
+
+		if (next != -1)
+		{
+			if (reverse_flag)
+				reverse(center[next].begin(), center[next].end());
+			swap(center[i], center[next]);
+		}
+	}
+
+	double X_MAX = 190;
+	double Y_MAX = 269;
+	double resize_k = min(X_MAX / src.cols,   src.rows/ Y_MAX);
+
+	//resize
+	/*
+	for (size_t i = 0; i < center.size(); ++i)
+	{
+		size_t len = center[i].size();
+		for (size_t j = 0; j < len; ++j)
+		{
+			center[i][j].o *= resize_k;
+			center[i][j].r *= resize_k;
+			
+		}
+	}
+	*/
 
 
+	
+	cout << "g-code" << endl;
+	
+	double power_adj = 15;
+	ofstream gcode("test.gcode");
 
+	for (size_t i = 0; i < center.size(); ++i)
+	if(center[i].size() >= 3)
+	{
+		
+		size_t len = center[i].size();
+		size_t endp = len - 1;
+		double end_len = 0;
+		while (end_len < 5 && endp > 0)
+		{
+			end_len += norm(center[i][endp - 1].o - center[i][endp].o);
+			endp--;
+		}
+		double last_r = -1;
+		//移动到起始点
+		for (size_t j = 0; j < len; ++j)
+		{
+			gcode << "G1 X" << center[i][j].o.x << " Y" << center[i][j].o.y << " F6000" << endl;
+			//if (j != len -1 && (last_r < 0 || abs(last_r - center[i][j].r) > 2))
+			if (j == 0)
+			{
+				double power = 10 * center[i][j].r +  power_adj;
+				power = max(min(power, 255.0), -255.0);//
+				gcode << "G90" << endl << "M400" << endl;
+				if (power < 0)
+					gcode << "M804" << endl; // 回抽
+				else
+					gcode << "M803" << endl; // 挤出
+				gcode << "M801 S" << abs(int(power)) << endl; //设定气压
+
+				//if (last_r  < 0)
+					gcode << "G4 P500" << endl; //等待120ms
+
+				last_r = center[i][j].r;
+			}
+			if (j == endp)
+			{
+				gcode << "G90" << endl << "M400" << endl;
+				gcode << "M804" << endl << "M801 S100" << endl; // 回抽
+			}
+		}
+		gcode << "G4 P500" << endl;
+	}
+	gcode << "G4 P400" << endl;
+	gcode << "G1 X0 Y0 F6000" << endl; //回原点
+
+	//debug
+	for (int i = 0; i < center.size(); ++i)
+	{
+		size_t len = center[i].size();
+		for (int j = 1; j < len; ++j)
+		{
+			line(res, center[i][j].o, center[i][j - 1].o, Scalar(255, 255, 0), 2);
+			//circle(res, center[i][j].o, center[i][j].r+0.9, Scalar(0, 0, 255), 1);
+		}
+		if (i + 1 < center.size())
+			line(res, center[i + 1][0].o, center[i][len - 1].o, Scalar(0, 0, 255),1);
+		circle(res, center[i][0].o, 2, Scalar(0, 0, 255), 2);
+		circle(res, VecLast(center[i]).o, 2, Scalar(0, 0, 255), 2);
+		//imshow("test", res);
+		//waitKey(0);
+	}
 
 	imshow("test",res);
 	waitKey(0);
-
+	 
 	return 0;
 }
