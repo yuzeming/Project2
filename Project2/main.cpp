@@ -6,6 +6,8 @@
 #include <iostream>
 #include <fstream>
 
+#define sqr(x) ((x)*(x))
+
 using namespace cv;
 using namespace std;
 
@@ -87,6 +89,7 @@ public:
 	Point2d x, p; //垂点，法线
 	double r; // 半径
 	Point2d o; //圆心 o = x + p * r
+	double s; //与之前的点不重合的面积
 };
 
 vector< vector<TCircle> > center; //圆心 <x,y,r>
@@ -105,9 +108,6 @@ bool check(Point2d o,double r)
 				return false;
 		}
 	}
-
-	
-
 	return true;
 }
 
@@ -123,7 +123,6 @@ bool CheckLine(const vector<vector<Point> >& poly,Point2d x, Point2d y)
 			b = poly[i][(j + 1) % len];
 			if (calcCrossPoint(a, b, x, y, ret))
 				return false;
-
 		}
 	}
 	return true;
@@ -144,17 +143,47 @@ void addCircle(const vector<vector<Point> >& poly,const Point2d x, const Point2d
 		center.push_back(vector<TCircle>());
 	VecLast(center).push_back(tmp);
 	
-
 }
 
+void CalcS()
+{
+	for (size_t i = 0; i < center.size(); ++i)
+	{
+		int size = center[i].size();
+		for (size_t j = 0; j < size; ++j)
+		{
+
+			double rx = 0.1;
+			double r_step = 0.2;
+			center[i][j].s = sqr(rx) * PI;
+			while (rx < center[i][j].r)
+			{
+				int k = int(rx * PI * 2 / r_step);
+				double unit_s = (sqr(rx + r_step) - sqr(rx)) * PI / k;
+				double tmp_r = rx + r_step / 2;
+				for (int phi = 0; phi < k; ++phi)
+				{
+					Point2d p = center[i][j].o + Point2d(cos(2 * PI*phi / k), sin(2 * PI*phi / k)) * tmp_r;
+					bool flag = true;
+					for (size_t q = max(int(j) - 10, 0); q < j && flag; ++q)
+						if (norm(p - center[i][q].o) < center[i][q].r)
+							flag = false;
+					if (flag)
+						center[i][j].s += unit_s;
+				}
+				rx += r_step;
+			}
+			//printf("%lf %lf\n", center[i][j].r, center[i][j].s);
+		}
+	}
+}
 
 int main()
 {
-	
 	vector<vector<Point> > contours;
 	vector<Vec4i> hierarchy;
 	
-	src = imread("b.png",IMREAD_GRAYSCALE);
+	src = imread("mew.png",IMREAD_GRAYSCALE);
 
 	cvtColor(src,res,COLOR_GRAY2BGR);
 
@@ -167,7 +196,6 @@ int main()
 		approxPolyDP( Mat(contours[i]), contours_poly[i], 2, true);
 
 	for( size_t i = 0; i < contours_poly.size(); ++i )
-	if ( contours_poly[i].size() >= 3)
 	{
 
 		Point2d a,b,c,c1,x,y;
@@ -181,24 +209,17 @@ int main()
 
 			//直线上逐一模拟
 			c = b - a; 
-			//if (norm(c) >= step_len)
+
+			int step_max = max(int( norm(c) / step_len  ),1);
+			c1 = Point2d(c.y, -c.x)/ norm(c); //单位法线方向向量
+			for (int k=0;k<step_max;++k)
 			{
-				int step_max = int( norm(c) / step_len);
-				c1 = Point2d(c.y, -c.x)/ norm(c); //单位法线方向向量
-				for (int k=0;k<step_max;++k)
-				{
-					x = c * ( (k + 0.5) / step_max ) + a ; // 取样点
-					y = x + c1 * 1000 ; // 无限长射线
-					R = calcR(contours_poly,x,y);
-					addCircle(contours_poly,x,c1,R);
-					//line(res, x, y, Scalar(255, 255, 0));
-					//circle(res, x + c1*R, R, Scalar(0, 255, 0));
-					//imshow("test", res);
-					//waitKey(0);
-
-				}
+				x = c * ( (k + 0.5) / step_max ) + a ; // 取样点
+				y = x + c1 * 1000 ; // 无限长射线
+				R = calcR(contours_poly,x,y);
+				addCircle(contours_poly,x,c1,R);
 			}
-
+			
 			c = contours_poly[i][(j+2)%len];
 			double alpha = atan2(a - b);
 			double beta = atan2(c - b);
@@ -214,16 +235,9 @@ int main()
 
 			addCircle(contours_poly, x, c1, R);
 
-			//line(res, x, y, Scalar(255, 255, 0));
-			//circle(res, x + c1*R, R, Scalar(0, 255, 0));
-			//imshow("test", res);
-			//waitKey(0);
 		}
 	}
 
-
-
-	
 	//平滑半径
 	int KX = 5;
 	for (size_t i = 0; i < center.size(); ++i)
@@ -240,7 +254,6 @@ int main()
 		}
 	}
 
-	
 	for (size_t i = 0; i < center.size(); ++i)
 		for (size_t j = i + 1; j < center.size(); ++j)
 			for (size_t k = 0; k < 4; ++k)
@@ -260,20 +273,18 @@ int main()
 				}
 			}
 	
-	
 	for (int i = 0; i < center.size(); ++i)
 	{
 		double len = 0;
 		for (int j = 1; j < center[i].size(); ++j)
 			len += norm(center[i][j].o - center[i][j - 1].o);
-		if (len < 5)
+		if (len < 10)
 		{
 			center.erase(center.begin() + i);
 			--i;
 		}
 	}
 	
-
 	//排序
 	for (int i = 1; i < center.size(); ++i)
 	{
@@ -306,75 +317,64 @@ int main()
 		}
 	}
 
-	double X_MAX = 190;
-	double Y_MAX = 269;
+
+	CalcS();
+	
+	double X_MAX = 200;
+	double Y_MAX = 300;
 	double resize_k = min(X_MAX / src.cols,   src.rows/ Y_MAX);
-
-	//resize
-	/*
-	for (size_t i = 0; i < center.size(); ++i)
-	{
-		size_t len = center[i].size();
-		for (size_t j = 0; j < len; ++j)
-		{
-			center[i][j].o *= resize_k;
-			center[i][j].r *= resize_k;
-			
-		}
-	}
-	*/
-
-
 	
-	cout << "g-code" << endl;
-	
-	double power_adj = 15;
+	int power_on= 10;
+	int power_off = -10;
+	int power_stop = -100;
+	double expextrude = 2500;
+
 	ofstream gcode("test.gcode");
 
+
 	for (size_t i = 0; i < center.size(); ++i)
-	if(center[i].size() >= 3)
+	if(center[i].size() >= 5)
 	{
-		
 		size_t len = center[i].size();
 		size_t endp = len - 1;
 		double end_len = 0;
 		while (end_len < 5 && endp > 0)
 		{
-			end_len += norm(center[i][endp - 1].o - center[i][endp].o);
+			end_len += resize_k*norm(center[i][endp - 1].o - center[i][endp].o);
 			endp--;
 		}
 		double last_r = -1;
 		//移动到起始点
 		for (size_t j = 0; j < len; ++j)
 		{
-			gcode << "G1 X" << center[i][j].o.x << " Y" << center[i][j].o.y << " F6000" << endl;
-			//if (j != len -1 && (last_r < 0 || abs(last_r - center[i][j].r) > 2))
+			gcode << "G1 X" << center[i][j].o.x*resize_k << " Y" << center[i][j].o.y*resize_k << " F"<< int(expextrude / pow( center[i][j].s * sqr(resize_k),1.2) )<< endl;
 			if (j == 0)
 			{
-				double power = 10 * center[i][j].r +  power_adj;
-				power = max(min(power, 255.0), -255.0);//
+				double power = power_on;
 				gcode << "G90" << endl << "M400" << endl;
-				if (power < 0)
+				if (power_on < 0)
 					gcode << "M804" << endl; // 回抽
 				else
 					gcode << "M803" << endl; // 挤出
-				gcode << "M801 S" << abs(int(power)) << endl; //设定气压
+				gcode << "M801 S" << abs(power_on) << endl; //设定气压
 
-				//if (last_r  < 0)
-					gcode << "G4 P500" << endl; //等待120ms
+				gcode << "G4 P300" << endl; //等待300ms
 
 				last_r = center[i][j].r;
 			}
 			if (j == endp)
 			{
 				gcode << "G90" << endl << "M400" << endl;
-				gcode << "M804" << endl << "M801 S100" << endl; // 回抽
+				gcode << "M804" << endl;
+				gcode << "M801 S"<< abs(power_off) << endl; // 回抽
 			}
 		}
-		gcode << "G4 P500" << endl;
+		gcode << "G4 P300" << endl;
 	}
+	gcode << "M804" << endl;
+	gcode << "M801 S" << abs(power_stop) << endl; // 回抽
 	gcode << "G4 P400" << endl;
-	gcode << "G1 X0 Y0 F6000" << endl; //回原点
+	gcode << "G28" << endl; //回原点
 
 	//debug
 	for (int i = 0; i < center.size(); ++i)
